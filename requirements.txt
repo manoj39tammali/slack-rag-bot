@@ -1,0 +1,8 @@
+anthropic
+flask
+pypdf2
+scikit-learn
+python-dotenv
+slack-sdk
+requests
+gunicorn
