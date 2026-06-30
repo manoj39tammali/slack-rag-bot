@@ -87,14 +87,16 @@ Answer:"""
 
 @app.route("/slack/events", methods=["POST"])
 def slack_events():
-    payload = request.json
+    import json
+    raw_body = request.get_data()
+    payload = json.loads(raw_body)
 
     # Handle URL verification challenge first (before signature check)
     if payload.get("type") == "url_verification":
         return jsonify({"challenge": payload["challenge"]})
 
     # Verify request is from Slack
-    if not verifier.is_valid_request(request.get_data(), request.headers):
+    if not verifier.is_valid_request(raw_body, request.headers):
         return jsonify({"error": "invalid request"}), 403
 
     event = payload.get("event", {})
