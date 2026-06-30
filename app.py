@@ -142,18 +142,10 @@ def slack_events():
 
 @app.route("/slack/upload", methods=["POST"])
 def slack_upload():
-    global pdf_chunks, pdf_name
-
-    user_id = request.form.get("user_id")
-    channel_id = request.form.get("channel_id")
-
-    # Prompt the user to upload a file
-    slack_client.chat_postMessage(
-        channel=channel_id,
-        text=f"<@{user_id}> Please upload a PDF file in this channel and I'll process it for RAG. Make sure to share the file directly in the channel."
-    )
-
-    return jsonify({"response_type": "ephemeral", "text": "Please upload a PDF file in the channel."})
+    return jsonify({
+        "response_type": "ephemeral",
+        "text": "Please upload a PDF file directly in this channel. I'll automatically process it when I see it!"
+    })
 
 
 @app.route("/slack/file", methods=["POST"])
