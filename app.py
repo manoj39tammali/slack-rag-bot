@@ -93,7 +93,7 @@ def slack_events():
 
     # Handle URL verification challenge first (before signature check)
     if payload.get("type") == "url_verification":
-        return jsonify({"challenge": payload["challenge"]})
+        return payload["challenge"], 200, {"Content-Type": "text/plain"}
 
     # Verify request is from Slack
     if not verifier.is_valid_request(raw_body, request.headers):
@@ -144,10 +144,6 @@ def slack_events():
 def slack_upload():
     global pdf_chunks, pdf_name
 
-    # Verify request is from Slack
-    if not verifier.is_valid_request(request.get_data(), request.headers):
-        return jsonify({"error": "invalid request"}), 403
-
     user_id = request.form.get("user_id")
     channel_id = request.form.get("channel_id")
 
@@ -163,13 +159,12 @@ def slack_upload():
 @app.route("/slack/file", methods=["POST"])
 def slack_file_event():
     """Handle file uploads via event subscription."""
-    if not verifier.is_valid_request(request.get_data(), request.headers):
-        return jsonify({"error": "invalid request"}), 403
-
-    payload = request.json
+    import json
+    raw_body = request.get_data()
+    payload = json.loads(raw_body)
 
     if payload.get("type") == "url_verification":
-        return jsonify({"challenge": payload["challenge"]})
+        return payload["challenge"], 200, {"Content-Type": "text/plain"}
 
     event = payload.get("event", {})
 
