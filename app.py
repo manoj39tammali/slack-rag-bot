@@ -19,9 +19,9 @@ anthropic_client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 slack_client = WebClient(token=os.getenv("SLACK_BOT_TOKEN"))
 verifier = SignatureVerifier(os.getenv("SLACK_SIGNING_SECRET"))
 
-# In-memory RAG store (shared across all users)
-pdf_chunks = []
-pdf_name = ""
+# In-memory RAG store — supports multiple documents
+# { "filename": [chunks] }
+docs_store = {}
 
 
 # ── RAG helpers (copied from rag-pdf-chat) ──────────────────────────
@@ -57,11 +57,32 @@ def find_relevant_chunks(question, chunks, top_k=4):
     return [chunks[i] for i in top_indices if similarities[i] > 0]
 
 
-def ask_claude(question, chunks):
-    relevant = find_relevant_chunks(question, chunks)
+def ask_claude(question, docs_store):
+    # Combine all chunks from all documents
+    all_chunks = []
+    for filename, chunks in docs_store.items():
+        for chunk in chunks:
+            all_chunks.append((filename, chunk))
+
+    if not all_chunks:
+        return "I couldn't find relevant information in the loaded documents."
+
+    # Find relevant chunks across all docs
+    texts = [c[1] for c in all_chunks]
+    vectorizer = TfidfVectorizer(stop_words='english')
+    all_texts = texts + [question]
+    tfidf_matrix = vectorizer.fit_transform(all_texts)
+    chunk_vectors = tfidf_matrix[:-1]
+    question_vector = tfidf_matrix[-1]
+    similarities = cosine_similarity(question_vector, chunk_vectors)[0]
+    top_indices = similarities.argsort()[-4:][::-1]
+    relevant = [(all_chunks[i][0], all_chunks[i][1]) for i in top_indices if similarities[i] > 0]
+
     if not relevant:
         return "I couldn't find relevant information in the loaded documents."
-    context = "\n\n---\n\n".join(relevant)
+
+    context = "\n\n---\n\n".join([f"[From: {fname}]\n{chunk}" for fname, chunk in relevant])
+
     message = anthropic_client.messages.create(
         model="claude-haiku-4-5-20251001",
         max_tokens=1024,
@@ -69,7 +90,10 @@ def ask_claude(question, chunks):
             {
                 "role": "user",
                 "content": f"""You are a helpful Slack assistant answering questions about uploaded documents.
-Use only the context below. If the answer isn't there, say so clearly.
+Use only the context below. Always mention which document each piece of information comes from.
+If different documents give conflicting answers, clearly highlight the conflict like this:
+"⚠️ Conflict: [Doc A] says X, but [Doc B] says Y."
+If the answer isn't in any document, say so clearly.
 
 Context:
 {context}
@@ -132,13 +156,14 @@ def slack_events():
                 )
                 continue
 
-            global pdf_chunks, pdf_name
-            pdf_chunks = chunk_text(text)
-            pdf_name = file_info.get("name", "document.pdf")
+            fname = file_info.get("name", "document.pdf")
+            chunks = chunk_text(text)
+            docs_store[fname] = chunks
 
+            doc_list = "\n".join([f"• {name} ({len(c)} chunks)" for name, c in docs_store.items()])
             slack_client.chat_postMessage(
                 channel=channel,
-                text=f"✅ *{pdf_name}* loaded! ({len(pdf_chunks)} chunks)\nNow ask me: `@RAG Bot what is X?`"
+                text=f"✅ *{fname}* loaded! ({len(chunks)} chunks)\n\n*Loaded documents:*\n{doc_list}\n\nNow ask me: `@RAG Bot what is X?`"
             )
 
     # Bot mentioned: @bot <question>
@@ -157,7 +182,7 @@ def slack_events():
             )
             return jsonify({"ok": True})
 
-        if not pdf_chunks:
+        if not docs_store:
             slack_client.chat_postMessage(
                 channel=channel,
                 thread_ts=thread_ts,
@@ -165,7 +190,7 @@ def slack_events():
             )
             return jsonify({"ok": True})
 
-        answer = ask_claude(question, pdf_chunks)
+        answer = ask_claude(question, docs_store)
         slack_client.chat_postMessage(
             channel=channel,
             thread_ts=thread_ts,
@@ -242,7 +267,7 @@ def slack_file_event():
 
 @app.route("/", methods=["GET"])
 def health():
-    return jsonify({"status": "ok", "docs_loaded": pdf_name or "none"})
+    return jsonify({"status": "ok", "docs_loaded": list(docs_store.keys()) or "none"})
 
 
 if __name__ == "__main__":
