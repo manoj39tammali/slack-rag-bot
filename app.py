@@ -102,20 +102,58 @@ def slack_events():
     event = payload.get("event", {})
     event_type = event.get("type")
 
+    # Handle file uploads
+    if event_type == "message" and event.get("files") and not event.get("bot_id"):
+        channel = event["channel"]
+        for file_info in event["files"]:
+            if file_info.get("filetype") != "pdf":
+                slack_client.chat_postMessage(
+                    channel=channel,
+                    text="Only PDF files are supported."
+                )
+                continue
+
+            file_url = file_info["url_private"]
+            headers = {"Authorization": f"Bearer {os.getenv('SLACK_BOT_TOKEN')}"}
+            response = req.get(file_url, headers=headers)
+
+            if response.status_code != 200:
+                slack_client.chat_postMessage(
+                    channel=channel,
+                    text="Failed to download the file. Please try again."
+                )
+                continue
+
+            text = extract_text_from_pdf(response.content)
+            if not text.strip():
+                slack_client.chat_postMessage(
+                    channel=channel,
+                    text="Could not extract text from the PDF (may be scanned/image-based)."
+                )
+                continue
+
+            global pdf_chunks, pdf_name
+            pdf_chunks = chunk_text(text)
+            pdf_name = file_info.get("name", "document.pdf")
+
+            slack_client.chat_postMessage(
+                channel=channel,
+                text=f"✅ *{pdf_name}* loaded! ({len(pdf_chunks)} chunks)\nNow ask me: `@RAG Bot what is X?`"
+            )
+
     # Bot mentioned: @bot <question>
-    if event_type == "app_mention":
+    elif event_type == "app_mention":
         channel = event["channel"]
         thread_ts = event.get("thread_ts", event.get("ts"))
         text = event.get("text", "")
 
-        # Strip the bot mention from the text
         question = text.split(">", 1)[-1].strip()
 
         if not question:
             slack_client.chat_postMessage(
                 channel=channel,
                 thread_ts=thread_ts,
-                text="Please ask me a question! e.g. `@bot what is the refund policy?`"
+                text="Please ask me a question! e.g. `@RAG Bot what is the refund policy?`"
             )
             return jsonify({"ok": True})
 
@@ -123,11 +161,10 @@ def slack_events():
             slack_client.chat_postMessage(
                 channel=channel,
                 thread_ts=thread_ts,
-                text="No documents loaded yet. Use `/upload` and attach a PDF first."
+                text="No documents loaded yet. Upload a PDF in this channel first."
             )
             return jsonify({"ok": True})
 
-        # Answer using RAG
         answer = ask_claude(question, pdf_chunks)
         slack_client.chat_postMessage(
             channel=channel,
